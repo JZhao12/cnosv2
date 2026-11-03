@@ -1,6 +1,5 @@
 import os
 import numpy as np
-import pathlib
 from src.utils.inout import get_root_project
 from scipy.spatial.transform import Rotation
 import torch
@@ -23,20 +22,6 @@ def combine_R_and_T(R, T, scale_translation=1.0):
     matrix4x4[:3, :3] = np.array(R).reshape(3, 3)
     matrix4x4[:3, 3] = np.array(T).reshape(-1) * scale_translation
     return matrix4x4
-
-
-def read_template_poses(is_opengl_camera, dense=False):
-    current_dir = pathlib.Path(__file__).parent.absolute()
-    path = f"{current_dir}/predefined_poses/sphere_level"
-    if dense:
-        path += "3.npy"
-    else:
-        path += "2.npy"
-    template_poses = np.load(path)
-    if is_opengl_camera:
-        for id_frame in range(len(template_poses)):
-            template_poses[id_frame] = opencv2opengl(template_poses[id_frame])
-    return template_poses
 
 
 def geodesic_numpy(R1, R2):

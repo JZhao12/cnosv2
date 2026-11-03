@@ -1,5 +1,16 @@
 # Additional 
-configs/user/nguyen.yaml
+# Third-party repos and model weights (clone/download separately, see README)
+sam2_repo/
+dinov3_repo/
+datasets/
+# YCB-V test data and meshes (large, local only)
+media/ycbv_models/
+media/ycbv_models.zip
+media/ycbv_test_bop19/
+media/ycbv_base/
+*.pth
+*.pt
+
 .vscode/
 .hydra/
 outputs/

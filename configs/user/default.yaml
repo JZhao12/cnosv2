@@ -1,2 +1,2 @@
-local_root_dir: ./datasets/bop23_challenge
-slurm_root_dir: ./datasets/bop23_challenge
+dinov3_repo: ./dinov3_repo
+sam2_repo: ./sam2_repo

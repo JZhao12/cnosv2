@@ -43,6 +43,24 @@ def mask_to_rle(binary_mask):
     return rle
 
 
+def rle_to_mask(rle):
+    """Compute a binary mask from an uncompressed RLE.
+
+    Same semantics as `sam2.utils.amg.rle_to_mask`. Kept local so importing it does
+    not pull in the SAM2 package (whose import registers its own Hydra config module).
+    """
+    h, w = rle["size"]
+    mask = np.empty(h * w, dtype=bool)
+    idx = 0
+    parity = False
+    for count in rle["counts"]:
+        mask[idx : idx + count] = parity
+        idx += count
+        parity ^= True
+    mask = mask.reshape(w, h)
+    return mask.transpose()  # Put in C order
+
+
 class BatchedData:
     """
     A structure for storing data in batched format.
@@ -181,7 +199,9 @@ class Detections:
         boxes = xywh_to_xyxy(np.array(data["bbox"]))
         output = {
             "object_ids": data["category_id"] - 1,
-            "bbox": boxes,
+            # attribute name must be `boxes`: Detections.__init__/__len__/filter/
+            # save_to_file all read self.boxes (the file on disk keeps BOP's "bbox")
+            "boxes": boxes,
             "scores": data["score"],
         }
         if "segmentation" in data.keys():
@@ -189,7 +209,7 @@ class Detections:
         if "score_distribution" in data.keys():
             output["score_distribution"] = data["score_distribution"]
         logging.info(f"Loaded {file_path}")
-        return data
+        return output
 
     def filter(self, idxs):
         for key in self.keys:

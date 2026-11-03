@@ -1,0 +1,4 @@
+defaults:
+  - user: default
+  - model: cnos
+  - _self_
