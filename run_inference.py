@@ -5,6 +5,7 @@ BOP challenge format (COCO results + uncompressed RLE masks).
 usage: python run_inference.py dataset_name=ycbv
        python run_inference.py dataset_name=ycbv model.onboarding_config.level_templates=1
        python run_inference.py dataset_name=ycbv machine.trainer.limit_test_batches=5   # smoke test
+       python run_inference.py dataset_name=ycbv model.onboarding_config.rendering_type=pbr  # BlenderProc4BOP templates
 """
 import logging
 import os.path as osp
@@ -57,16 +58,19 @@ def run_inference(cfg: DictConfig):
 
     # reference templates
     rendering_type = cfg.model.onboarding_config.rendering_type
+    pbr_config = ref_dataloader_config.pop("pbr", {})
+    ref_dataloader_config.template_dir = osp.join(
+        ref_dataloader_config.template_dir, "templates_pyrender", dataset_name
+    )
     if rendering_type == "pyrender":
-        ref_dataloader_config.template_dir = osp.join(
-            ref_dataloader_config.template_dir, "templates_pyrender", dataset_name
-        )
         ref_dataset = instantiate(ref_dataloader_config)
     elif rendering_type == "pbr":
-        raise NotImplementedError(
-            "PBR templates (BOPTemplatePBR on train_pbr frames) are not ported yet, "
-            "use model.onboarding_config.rendering_type=pyrender"
-        )
+        # templates picked from the BlenderProc4BOP train_pbr frames of the dataset; the
+        # descriptor cache is stored next to the pyrender templates (template_dir)
+        ref_dataloader_config._target_ = "src.dataloader.bop_pbr.BOPTemplatePBR"
+        ref_dataloader_config.root_dir = query_dataloader_config.root_dir
+        ref_dataloader_config.update(pbr_config)
+        ref_dataset = instantiate(ref_dataloader_config)
     else:
         raise NotImplementedError(f"Unknown rendering_type {rendering_type}")
     model.ref_dataset = ref_dataset

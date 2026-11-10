@@ -2,8 +2,11 @@
 Collect the local bop_toolkit scores of every evaluated BOP dataset into a table aligned
 with Table 1 of the CNOS paper (segmentation AP, BOP'19 test targets).
 
-usage: python -m src.scripts.summarize_bop_results [--root datasets/bop23_challenge] [--method cnosv2] [--markdown out.md]
+usage: python -m src.scripts.summarize_bop_results [--root datasets/bop23_challenge] [--markdown out.md]
 
+Two CNOSv2 rows are reported when their scores exist: pyrender templates (method name
+cnosv2, predictions *_template_pyrender0_*.json) and templates picked from the
+BlenderProc4BOP train_pbr frames (method name cnosv2pbr, *_template_pbr0_*.json).
 Datasets without local scores (ITODD and HB ship no test ground truth) fall back to the
 scores returned by the BOP website, stored in docs/bop_website_scores/<method>_<ds>-test*_scores_bop22_coco_<task>.json.
 """
@@ -20,8 +23,13 @@ PAPER = {
     "CNOS (SAM + DINOv2 + BlenderProc)":     {"lmo": 39.6, "tless": 39.7, "tudl": 39.1, "icbin": 28.4, "itodd": 28.2, "hb": 48.0, "ycbv": 59.5},
     "CNOS (FastSAM + DINOv2 + BlenderProc)": {"lmo": 39.7, "tless": 37.4, "tudl": 48.0, "icbin": 27.0, "itodd": 25.4, "hb": 51.1, "ycbv": 59.9},
 }
-OURS = "CNOSv2 (SAM2 + DINOv3 + Pyrender)"
+# bop_toolkit method name -> (table name, rendering_type used in the prediction file name)
+OURS = {
+    "cnosv2":    ("CNOSv2 (SAM2 + DINOv3 + Pyrender)", "pyrender"),
+    "cnosv2pbr": ("CNOSv2 (SAM2 + DINOv3 + BlenderProc)", "pbr"),
+}
 SPLIT_SUFFIX = {"tless": "-primesense", "hb": "-primesense"}
+PRED_FILE = "CustomSam2AutomaticMaskGenerator_template_{rendering}0_aggavg_5_{ds}.json"
 
 
 WEBSITE_DIR = osp.join(osp.dirname(osp.abspath(__file__)), "..", "..", "docs", "bop_website_scores")
@@ -48,68 +56,71 @@ def fmt(x):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="./datasets/bop23_challenge")
-    ap.add_argument("--method", default="cnosv2")
     ap.add_argument("--markdown", default=None, help="also write the tables to this markdown file")
     args = ap.parse_args()
 
-    scores = {ds: load_scores(args.root, args.method, ds) for ds in PAPER_ORDER}
     pred_dir = osp.join(args.root, "results", "cnos_exps")
+    scores = {m: {ds: load_scores(args.root, m, ds) for ds in PAPER_ORDER} for m in OURS}
+    methods = [m for m in OURS if any("segm" in s for s in scores[m].values())]
 
-    def row(name, vals, mean_over=None):
+    def row(name, vals):
         cells = [fmt(vals.get(ds)) for ds in PAPER_ORDER]
-        present = [vals[ds] for ds in (mean_over or PAPER_ORDER) if vals.get(ds) is not None]
+        present = [vals[ds] for ds in PAPER_ORDER if vals.get(ds) is not None]
         mean = sum(present) / len(present) if present else None
         return f"| {name} | " + " | ".join(cells) + f" | {fmt(mean)} |"
 
     header = "| Method | " + " | ".join(PAPER_NAMES[d] for d in PAPER_ORDER) + " | Mean |\n|---|" + "---|" * (len(PAPER_ORDER) + 1)
-    ours_segm = {ds: s["segm"]["AP"] * 100 for ds, s in scores.items() if "segm" in s}
-    ours_bbox = {ds: s["bbox"]["AP"] * 100 for ds, s in scores.items() if "bbox" in s}
-    evaluated = [ds for ds in PAPER_ORDER if ds in ours_segm]
-    missing = [ds for ds in PAPER_ORDER if ds not in ours_segm]
+    segm = {m: {ds: s["segm"]["AP"] * 100 for ds, s in scores[m].items() if "segm" in s} for m in methods}
+    bbox = {m: {ds: s["bbox"]["AP"] * 100 for ds, s in scores[m].items() if "bbox" in s} for m in methods}
+    web = {m: [ds for ds in PAPER_ORDER if scores[m][ds].get("segm", {}).get("_source", "local") != "local"] for m in methods}
+    missing = {m: [ds for ds in PAPER_ORDER if ds not in segm[m]] for m in methods}
 
     lines = []
-    lines.append("### 2D segmentation AP (BOP'19 test targets, pyrender templates, 42 views)")
+    lines.append("### 2D segmentation AP (BOP'19 test targets, 42 template views)")
     lines.append("")
     lines.append(header)
     for name, vals in PAPER.items():
         lines.append(row(name, vals))
-    web = [ds for ds in PAPER_ORDER if scores[ds].get("segm", {}).get("_source", "local") != "local"]
-    lines.append(row(OURS, ours_segm))
+    for m in methods:
+        lines.append(row(OURS[m][0], segm[m]))
     lines.append("")
     lines.append(f"The first {len(PAPER)} rows are Table 1 of the CNOS paper (ICCV-W 2023).")
     lines.append("")
     lines.append("### 2D detection AP (amodal bbox), ours only")
     lines.append("")
     lines.append(header)
-    lines.append(row(OURS, ours_bbox))
-    lines.append("")
-    lines.append("### Per-dataset details (ours)")
-    lines.append("")
-    lines.append("| Dataset | images | detections | segm AP | AP50 | AP75 | AR100 | bbox AP | time / image | scored |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
-    for ds in PAPER_ORDER:
-        s = scores[ds]
-        pred = osp.join(pred_dir, f"CustomSam2AutomaticMaskGenerator_template_pyrender0_aggavg_5_{ds}.json")
-        n_img = n_det = "-"
-        if osp.exists(pred):
-            d = json.load(open(pred))
-            n_det = len(d); n_img = len({(x["scene_id"], x["image_id"]) for x in d})
-        if "segm" in s:
-            g, b = s["segm"], s.get("bbox", {})
-            src = "local" if g.get("_source", "local") == "local" else "BOP website"
-            bbox_ap = fmt(b["AP"] * 100) if "AP" in b else "-"
-            lines.append(f"| {PAPER_NAMES[ds]} | {n_img} | {n_det} | {g['AP']*100:.1f} | {g['AP50']*100:.1f} | {g['AP75']*100:.1f} | {g['AR100']*100:.1f} | {bbox_ap} | {g['average_time_per_image']:.2f} s | {src} |")
-        else:
-            note = "no test GT in the BOP release, score on bop.felk.cvut.cz" if osp.exists(pred) else "not run"
-            lines.append(f"| {PAPER_NAMES[ds]} | {n_img} | {n_det} | - | - | - | - | - | - | {note} |")
-    if web:
+    for m in methods:
+        lines.append(row(OURS[m][0], bbox[m]))
+    for m in methods:
+        name, rendering = OURS[m]
         lines.append("")
-        lines.append(f"{', '.join(PAPER_NAMES[d] for d in web)}: the BOP'19 test archives ship no scene_gt.json, so these scores come from the "
-                     f"BOP website (same eval_bop22_coco.py); raw score files in docs/bop_website_scores/. "
-                     f"Their bbox AP is listed only if the 2D detection task was also scored there.")
-    if missing:
+        lines.append(f"### Per-dataset details: {name}")
         lines.append("")
-        lines.append(f"Not evaluated: {', '.join(PAPER_NAMES[d] for d in missing)} (the mean of the CNOSv2 row is over the evaluated datasets only).")
+        lines.append("| Dataset | images | detections | segm AP | AP50 | AP75 | AR100 | bbox AP | time / image | scored |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        for ds in PAPER_ORDER:
+            s = scores[m][ds]
+            pred = osp.join(pred_dir, PRED_FILE.format(rendering=rendering, ds=ds))
+            n_img = n_det = "-"
+            if osp.exists(pred):
+                d = json.load(open(pred))
+                n_det = len(d); n_img = len({(x["scene_id"], x["image_id"]) for x in d})
+            if "segm" in s:
+                g, b = s["segm"], s.get("bbox", {})
+                src = "local" if g.get("_source", "local") == "local" else "BOP website"
+                bbox_ap = fmt(b["AP"] * 100) if "AP" in b else "-"
+                lines.append(f"| {PAPER_NAMES[ds]} | {n_img} | {n_det} | {g['AP']*100:.1f} | {g['AP50']*100:.1f} | {g['AP75']*100:.1f} | {g['AR100']*100:.1f} | {bbox_ap} | {g['average_time_per_image']:.2f} s | {src} |")
+            else:
+                note = "no test GT in the BOP release, score on bop.felk.cvut.cz" if osp.exists(pred) else "not run"
+                lines.append(f"| {PAPER_NAMES[ds]} | {n_img} | {n_det} | - | - | - | - | - | - | {note} |")
+        if web[m]:
+            lines.append("")
+            lines.append(f"{', '.join(PAPER_NAMES[d] for d in web[m])}: the BOP'19 test archives ship no scene_gt.json, so these scores come from the "
+                         f"BOP website (same eval_bop22_coco.py); raw score files in docs/bop_website_scores/. "
+                         f"Their bbox AP is listed only if the 2D detection task was also scored there.")
+        if missing[m]:
+            lines.append("")
+            lines.append(f"Not evaluated: {', '.join(PAPER_NAMES[d] for d in missing[m])} (the mean of the {name} row is over the evaluated datasets only).")
     text = "\n".join(lines)
     print(text)
     if args.markdown:

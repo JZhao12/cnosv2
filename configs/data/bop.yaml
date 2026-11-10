@@ -13,11 +13,16 @@ reference_dataloader:
   num_imgs_per_obj: 100
   processing_config:
     image_size: ${model.descriptor_model.image_size}
-    max_num_scenes: 10 # config for reference frames selection (PBR templates only)
-    max_num_frames: 500
+  # templates picked from the BlenderProc4BOP frames (model.onboarding_config.rendering_type=pbr,
+  # src/dataloader/bop_pbr.py): per template viewpoint, the instance of the first
+  # max_num_scenes scenes x max_num_frames frames of <dataset>/train_pbr with the closest
+  # viewing direction among those more than min_visib_fract visible. These are the values
+  # the original CNOS effectively used (its constructor defaults).
+  pbr:
+    split: train_pbr
+    max_num_scenes: 10
+    max_num_frames: 1000
     min_visib_fract: 0.8
-    num_references: 200
-    use_visible_mask: True
 
 query_dataloader:
   _target_: src.dataloader.bop.BaseBOPTest

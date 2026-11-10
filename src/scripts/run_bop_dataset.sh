@@ -6,6 +6,9 @@
 #           results/bop_eval/smoke_<dataset>-test*/ (pipeline check only, scores are meaningless)
 #   full  : every BOP'19 test target; predictions under results/cnos_exps/, scores under
 #           results/bop_eval/cnosv2_<dataset>-test*/
+#   RENDERING=pbr : use templates picked from the BlenderProc4BOP train_pbr frames instead of
+#           the pyrender ones (needs src/scripts/download_train_pbr.sh <dataset> first);
+#           predictions *_template_pbr0_*.json, scores under results/bop_eval/cnosv2pbr_<dataset>-test*/
 # GPU stages of concurrent invocations are serialised with flock on $GPU_LOCK
 # (default /tmp/cnosv2_gpu.lock); a 12 GB card fits one run at a time.
 set -euo pipefail
@@ -13,6 +16,8 @@ cd "$(dirname "$0")/../.."
 PYTHON=${PYTHON:-python}
 DS=${1:?usage: $0 <dataset> [smoke|full]}
 MODE=${2:-full}
+RENDERING=${RENDERING:-pyrender}
+case $RENDERING in pyrender|pbr) ;; *) echo "ERROR: RENDERING must be pyrender or pbr, got '$RENDERING'" >&2; exit 1;; esac
 ROOT=${ROOT_DIR:-./datasets/bop23_challenge}
 LOCK=${GPU_LOCK:-/tmp/cnosv2_gpu.lock}
 mkdir -p logs
@@ -25,28 +30,39 @@ DS_DIR=$ROOT/datasets/$DS
 [[ -d $CAD_DIR ]] || { echo "ERROR: CAD folder $CAD_DIR not found" >&2; exit 1; }
 N_OBJ=$(find "$CAD_DIR" -maxdepth 1 -name 'obj_*.ply' | wc -l)
 N_IMG=$($PYTHON -c "import json;print(len({(t['scene_id'],t['im_id']) for t in json.load(open('$DS_DIR/test_targets_bop19.json'))}))")
-echo "== $DS: $N_OBJ CAD models in $CAD_DIR, $N_IMG target images in $SPLIT, mode=$MODE"
+echo "== $DS: $N_OBJ CAD models in $CAD_DIR, $N_IMG target images in $SPLIT, mode=$MODE, templates=$RENDERING"
 
-# 1. templates: 642 views per object, rendered once
+# 1. templates
 TPL=$ROOT/datasets/templates_pyrender/$DS
-N_DONE=$($PYTHON -c "import glob;print(sum(1 for d in glob.glob('$TPL/obj_*/') if len(glob.glob(d+'*.png'))==642))")
-if [[ $N_DONE -ne $N_OBJ ]]; then
-  echo "== rendering templates ($N_DONE/$N_OBJ objects complete) -> logs/render_$DS.log"
-  flock -w 7200 "$LOCK" $PYTHON -m src.scripts.render_template_with_pyrender dataset_name=$DS > logs/render_$DS.log 2>&1 \
-    || { echo "ERROR: rendering failed" >&2; tail -5 logs/render_$DS.log >&2; exit 1; }
-  echo "== rendered $(find "$TPL" -name '*.png' | wc -l) templates"
+if [[ $RENDERING == pbr ]]; then
+  # frames of the BlenderProc4BOP split, picked at inference time by src/dataloader/bop_pbr.py
+  N_SCENES=$(ls -d "$DS_DIR"/train_pbr/*/ 2>/dev/null | wc -l)
+  [[ $N_SCENES -ge 10 ]] || { echo "ERROR: $DS_DIR/train_pbr has $N_SCENES scenes, need 10 (run src/scripts/download_train_pbr.sh $DS)" >&2; exit 1; }
+  echo "== PBR templates picked from $DS_DIR/train_pbr ($N_SCENES scenes)"
 else
-  echo "== templates already rendered: $TPL ($N_OBJ objects x 642 views)"
+  # 642 pyrender views per object, rendered once
+  N_DONE=$($PYTHON -c "import glob;print(sum(1 for d in glob.glob('$TPL/obj_*/') if len(glob.glob(d+'*.png'))==642))")
+  if [[ $N_DONE -ne $N_OBJ ]]; then
+    echo "== rendering templates ($N_DONE/$N_OBJ objects complete) -> logs/render_$DS.log"
+    flock -w 7200 "$LOCK" $PYTHON -m src.scripts.render_template_with_pyrender dataset_name=$DS > logs/render_$DS.log 2>&1 \
+      || { echo "ERROR: rendering failed" >&2; tail -5 logs/render_$DS.log >&2; exit 1; }
+    echo "== rendered $(find "$TPL" -name '*.png' | wc -l) templates"
+  else
+    echo "== templates already rendered: $TPL ($N_OBJ objects x 642 views)"
+  fi
 fi
 
 # 2. inference
 if [[ $MODE == smoke ]]; then NAME_EXP=smoke_$DS; EXTRA="machine.trainer.limit_test_batches=5"; METHOD=smoke
 else NAME_EXP=cnos_exps; EXTRA=""; METHOD=cnosv2; fi
-echo "== inference -> $ROOT/results/$NAME_EXP (log: logs/infer_${DS}_$MODE.log)"
-flock -w 7200 "$LOCK" $PYTHON run_inference.py dataset_name=$DS name_exp=$NAME_EXP $EXTRA > logs/infer_${DS}_$MODE.log 2>&1 \
-  || { echo "ERROR: inference failed" >&2; grep -E 'Error|Traceback' -A3 logs/infer_${DS}_$MODE.log | tail -20 >&2; exit 1; }
-PRED=$(ls "$ROOT/results/$NAME_EXP/"*"_${DS}.json" | grep -v with_score_distribution)
-N_NPZ=$(find "$ROOT/results/$NAME_EXP/predictions/$DS" -name '*_runtime.npz' | wc -l)
+# bop_toolkit wants METHOD_DATASET-SPLIT.json with no "_" in METHOD, so pbr results use cnosv2pbr / smokepbr
+if [[ $RENDERING == pbr ]]; then METHOD=${METHOD}pbr; TAG=${MODE}_pbr; else TAG=$MODE; fi
+EXTRA="$EXTRA model.onboarding_config.rendering_type=$RENDERING"
+echo "== inference -> $ROOT/results/$NAME_EXP (log: logs/infer_${DS}_$TAG.log)"
+flock -w 7200 "$LOCK" $PYTHON run_inference.py dataset_name=$DS name_exp=$NAME_EXP $EXTRA > logs/infer_${DS}_$TAG.log 2>&1 \
+  || { echo "ERROR: inference failed" >&2; grep -E 'Error|Traceback' -A3 logs/infer_${DS}_$TAG.log | tail -20 >&2; exit 1; }
+PRED=$(ls "$ROOT/results/$NAME_EXP/"*"_template_${RENDERING}"[0-9]"_agg"*"_${DS}.json" | grep -v with_score_distribution)
+N_NPZ=$(find "$ROOT/results/$NAME_EXP/predictions/$DS/$(basename "$PRED" .json)" -name '*_runtime.npz' | wc -l)
 echo "== $N_NPZ images processed, predictions: $PRED"
 
 # 3. format check (bop_toolkit) + per-image sanity: GT object ids vs predicted ids
@@ -75,12 +91,12 @@ EOF
 #    predictions can only be scored by uploading $PRED to https://bop.felk.cvut.cz/
 if ! ls "$DS_DIR/$SPLIT"/*/scene_gt.json >/dev/null 2>&1; then
   echo "== no scene_gt.json in $DS_DIR/$SPLIT: local evaluation impossible, upload $PRED to the BOP website"
-  echo "== DONE $DS $MODE (predictions only)"
+  echo "== DONE $DS $MODE ($RENDERING templates, predictions only)"
   exit 0
 fi
-echo "== evaluation (log: logs/eval_${DS}_$MODE.log)"
-DATASET_NAME=$DS PYTHON=$PYTHON ROOT_DIR=$ROOT bash src/scripts/eval_bop_coco.sh "$PRED" $METHOD > logs/eval_${DS}_$MODE.log 2>&1 \
-  || { echo "ERROR: evaluation failed" >&2; tail -20 logs/eval_${DS}_$MODE.log >&2; exit 1; }
+echo "== evaluation (log: logs/eval_${DS}_$TAG.log)"
+DATASET_NAME=$DS PYTHON=$PYTHON ROOT_DIR=$ROOT bash src/scripts/eval_bop_coco.sh "$PRED" $METHOD > logs/eval_${DS}_$TAG.log 2>&1 \
+  || { echo "ERROR: evaluation failed" >&2; tail -20 logs/eval_${DS}_$TAG.log >&2; exit 1; }
 SCORE_DIR=$ROOT/results/bop_eval/${METHOD}_${DS}-test${SPLIT_SUFFIX}
 $PYTHON - "$SCORE_DIR" "$MODE" <<'EOF'
 import json, sys
@@ -91,4 +107,4 @@ for t in ["segm", "bbox"]:
     print(f"== {t:4s} AP {s['AP']*100:5.1f}  AP50 {s['AP50']*100:5.1f}  AP75 {s['AP75']*100:5.1f}  "
           f"AR100 {s['AR100']*100:5.1f}  time/img {s['average_time_per_image']:.2f}s{note}")
 EOF
-echo "== DONE $DS $MODE"
+echo "== DONE $DS $MODE ($RENDERING templates)"

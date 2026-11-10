@@ -7,11 +7,10 @@ models replaced:
 |---|---|---|
 | Mask proposals | Segment Anything (ViT-H) | **SAM 2.1 Hiera-L** |
 | Descriptors | DINOv2 ViT-L/14 | **DINOv3 ViT-L/16** (LVD-1689M weights) |
-| Scope | BOP benchmark + custom objects | BOP benchmark (pyrender templates) + custom objects |
+| Scope | BOP benchmark + custom objects | BOP benchmark (pyrender or BlenderProc templates) + custom objects |
 
-FastSAM, detectron2 visualisation and the PBR template mode (templates picked from BlenderProc
-`train_pbr` frames) have been removed; see [Testing on BOP datasets](#testing-on-bop-datasets) for
-what is supported.
+FastSAM and the detectron2 visualisation have been removed; see
+[Testing on BOP datasets](#testing-on-bop-datasets) for what is supported.
 
 ## Status
 
@@ -19,9 +18,13 @@ The two backbone models are swapped for newer ones. The custom single-image pipe
 validated qualitatively on the CAD models and images shipped in `media/`.
 
 BOP evaluation is ported (`run_inference.py` + local `bop_toolkit` scoring) and has been run on the
-seven BOP'23 core datasets. Mean 2D segmentation AP over the seven datasets is **45.5**, against
-36.1 (SAM + pyrender) and 40.4 (SAM + BlenderProc) reported for the original CNOS; see
-[Results](#results). ITODD and HB were scored on the BOP website, the other five locally.
+seven BOP'23 core datasets with both kinds of templates of the paper. With pyrender templates the mean
+2D segmentation AP over the seven datasets is **45.5**, against 36.1 (SAM + pyrender) and 40.4
+(SAM + BlenderProc) reported for the original CNOS. With BlenderProc templates (frames of the
+BlenderProc4BOP training split) the mean over the five locally scored datasets is 45.2, against 45.5
+for pyrender on the same five: unlike in the paper, realistic templates bring no gain on top of
+SAM2 + DINOv3; see [Results](#results). ITODD and HB were scored on the BOP website, the other
+five locally.
 
 ## Pipeline
 
@@ -222,6 +225,8 @@ Same layout as the original CNOS: everything lives under `configs/user/default.y
 bash src/scripts/download_bop_classic.sh lmo          # no argument = all seven BOP'23 core datasets
 bash src/scripts/run_bop_dataset.sh lmo smoke         # 5 images: checks templates -> inference -> scoring
 bash src/scripts/run_bop_dataset.sh lmo full          # all BOP'19 test targets
+bash src/scripts/download_train_pbr.sh lmo            # BlenderProc4BOP frames (22 GB), then:
+RENDERING=pbr bash src/scripts/run_bop_dataset.sh lmo full
 python -m src.scripts.summarize_bop_results           # table aligned with Table 1 of the paper
 ```
 
@@ -250,6 +255,11 @@ T-LESS, 8-bit grayscale `gray/*.tif` for ITODD, and the non-contiguous object id
 
 ### 2. Templates
 
+Two kinds of templates, selected with `model.onboarding_config.rendering_type` (rows 6 and 7 of
+Table 1 of the paper):
+
+**pyrender** (default):
+
 ```bash
 python -m src.scripts.render_template_with_pyrender dataset_name=ycbv   # `all` = seven BOP'23 core datasets
 ```
@@ -259,6 +269,25 @@ Renders the 642 views of the dense sphere for every CAD model into
 YCB-V). The number of views actually used as references is `model.onboarding_config.level_templates`
 (0: 42 views, 1: 162, 2: 642); their DINOv3 descriptors are cached next to the templates.
 
+**pbr** (BlenderProc): no rendering; the templates are real frames of the photo-realistic
+[BlenderProc4BOP](https://bop.felk.cvut.cz/datasets/) training split of the dataset.
+
+```bash
+bash src/scripts/download_train_pbr.sh ycbv   # no argument = all seven; 21-37 GB per dataset
+```
+
+Downloads `<dataset>_train_pbr.zip` from the Hugging Face mirror (8 parallel byte-range streams,
+resumable) and extracts it to `datasets/bop23_challenge/datasets/<dataset>/train_pbr/` (LM-O uses the
+LM archive). At inference time `src/dataloader/bop_pbr.py` picks, for each of the 42 template
+viewpoints and each object, the instance of the first 10 scenes (10 x 1000 frames) whose viewing
+direction is the closest among the instances that are more than 80% visible; the template is the
+frame with the background blacked out by `mask_visib` and cropped to the mask, exactly like a
+proposal. The selection is written to `<dataset>/train_pbr_templates_level0.json` and can be
+inspected with `python -m src.dataloader.bop_pbr ycbv` (one image grid per object in
+`logs/pbr_templates/`). One difference with the original implementation: the nearest instance is
+searched among all candidates, while the original drew 5000 of them at random (unseeded, with
+replacement) before the search, so its templates were not reproducible and not always the closest.
+
 ### 3. Inference
 
 ```bash
@@ -267,18 +296,24 @@ python run_inference.py dataset_name=ycbv
 python run_inference.py dataset_name=ycbv model.onboarding_config.level_templates=1
 # smoke test on 5 images
 python run_inference.py dataset_name=ycbv machine.trainer.limit_test_batches=5
+# BlenderProc templates (after download_train_pbr.sh ycbv)
+python run_inference.py dataset_name=ycbv model.onboarding_config.rendering_type=pbr
 ```
 
 Writes one `.npz` per image and the merged BOP-format predictions (COCO results with uncompressed
 RLE masks) to
-`datasets/bop23_challenge/results/cnos_exps/CustomSam2AutomaticMaskGenerator_template_pyrender0_aggavg_5_ycbv.json`.
-That file can be uploaded to the [BOP website](https://bop.felk.cvut.cz/) or scored locally:
+`datasets/bop23_challenge/results/cnos_exps/CustomSam2AutomaticMaskGenerator_template_pyrender0_aggavg_5_ycbv.json`
+(`_template_pbr0_` with BlenderProc templates). That file can be uploaded to the
+[BOP website](https://bop.felk.cvut.cz/) or scored locally:
 
 ### 4. Evaluation
 
 ```bash
 DATASET_NAME=ycbv bash src/scripts/eval_bop_coco.sh \
   datasets/bop23_challenge/results/cnos_exps/CustomSam2AutomaticMaskGenerator_template_pyrender0_aggavg_5_ycbv.json
+# BlenderProc templates: the method name has to differ (bop_toolkit parses METHOD_DATASET-SPLIT.json)
+DATASET_NAME=ycbv bash src/scripts/eval_bop_coco.sh \
+  datasets/bop23_challenge/results/cnos_exps/CustomSam2AutomaticMaskGenerator_template_pbr0_aggavg_5_ycbv.json cnosv2pbr
 ```
 
 The script computes `scene_gt_coco.json` once (`bop_toolkit/scripts/calc_gt_coco.py`), then runs
@@ -292,12 +327,13 @@ the [BOP website](https://bop.felk.cvut.cz/) for scoring.
 ### Results
 
 All numbers: BOP'19 test targets, SAM 2.1 Hiera-L proposals (`stability_score_thresh` 0.85), DINOv3
-ViT-L/16 descriptors, pyrender templates at level 0 (42 views), `bf16-mixed`, single RTX 5070
+ViT-L/16 descriptors, 42 templates per object (level 0) either rendered with pyrender or picked from
+the BlenderProc4BOP frames (see [2. Templates](#2-templates)), `bf16-mixed`, single RTX 5070
 (see [Method description](#method-description)). LM-O, T-LESS, TUD-L, IC-BIN and YCB-V are scored
 locally with `bop_toolkit`; ITODD and HB by the BOP website. Tables are generated with
 `python -m src.scripts.summarize_bop_results`.
 
-#### 2D segmentation AP (BOP'19 test targets, pyrender templates, 42 views)
+#### 2D segmentation AP (BOP'19 test targets, 42 template views)
 
 | Method | LM-O | T-LESS | TUD-L | IC-BIN | ITODD | HB | YCB-V | Mean |
 |---|---|---|---|---|---|---|---|---|
@@ -305,16 +341,21 @@ locally with `bop_toolkit`; ITODD and HB by the BOP website. Tables are generate
 | CNOS (SAM + DINOv2 + BlenderProc) | 39.6 | 39.7 | 39.1 | 28.4 | 28.2 | 48.0 | 59.5 | 40.4 |
 | CNOS (FastSAM + DINOv2 + BlenderProc) | 39.7 | 37.4 | 48.0 | 27.0 | 25.4 | 51.1 | 59.9 | 41.2 |
 | CNOSv2 (SAM2 + DINOv3 + Pyrender) | 41.7 | 46.3 | 46.6 | 38.6 | 23.7 | 56.3 | 65.6 | 45.5 |
+| CNOSv2 (SAM2 + DINOv3 + BlenderProc) | 42.9 | 43.3 | 37.9 | 36.3 | - | - | 65.5 | 45.2 |
 
-The first 3 rows are Table 1 of the CNOS paper (ICCV-W 2023).
+The first 3 rows are Table 1 of the CNOS paper (ICCV-W 2023). The BlenderProc row of CNOSv2 is
+awaiting the BOP website scores of ITODD and HB (prediction files in
+`datasets/bop23_challenge/results/bop_submission_pbr/`); its mean is over the five scored datasets,
+where the pyrender row averages 47.8.
 
 #### 2D detection AP (amodal bbox), ours only
 
 | Method | LM-O | T-LESS | TUD-L | IC-BIN | ITODD | HB | YCB-V | Mean |
 |---|---|---|---|---|---|---|---|---|
 | CNOSv2 (SAM2 + DINOv3 + Pyrender) | 41.6 | 36.5 | 40.0 | 26.0 | - | - | 57.3 | 40.3 |
+| CNOSv2 (SAM2 + DINOv3 + BlenderProc) | 42.3 | 31.5 | 33.8 | 24.3 | - | - | 51.0 | 36.6 |
 
-#### Per-dataset details (ours)
+#### Per-dataset details: pyrender templates
 
 | Dataset | images | detections | segm AP | AP50 | AP75 | AR100 | bbox AP | time / image | scored |
 |---|---|---|---|---|---|---|---|---|---|
@@ -329,6 +370,35 @@ The first 3 rows are Table 1 of the CNOS paper (ICCV-W 2023).
 ITODD, HB: the BOP'19 test archives ship no scene_gt.json, so these scores come from the BOP website (same eval_bop22_coco.py); raw score files in docs/bop_website_scores/. Their bbox AP is listed only if the 2D detection task was also scored there.
 
 The files uploaded to the BOP website (one per dataset, `cnosv2_<dataset>-test*.json[.gz]`) are written by `run_bop_dataset.sh` and collected in `datasets/bop23_challenge/results/bop_submission/`.
+
+#### Per-dataset details: BlenderProc templates
+
+| Dataset | images | detections | segm AP | AP50 | AP75 | AR100 | bbox AP | time / image | scored |
+|---|---|---|---|---|---|---|---|---|---|
+| LM-O | 200 | 11526 | 42.9 | 72.7 | 48.2 | 51.3 | 42.3 | 1.26 s | local |
+| T-LESS | 1000 | 50377 | 43.3 | 53.3 | 49.7 | 54.0 | 31.5 | 1.28 s | local |
+| TUD-L | 600 | 16853 | 37.9 | 63.4 | 42.9 | 52.4 | 33.8 | 1.15 s | local |
+| IC-BIN | 150 | 4633 | 36.3 | 62.8 | 39.4 | 44.3 | 24.3 | 1.21 s | local |
+| ITODD | 721 | 5827 | - | - | - | - | - | 1.14 s | BOP website, pending |
+| HB | 300 | 11469 | - | - | - | - | - | 1.22 s | BOP website, pending |
+| YCB-V | 900 | 23704 | 65.5 | 87.0 | 76.6 | 71.2 | 51.0 | 1.18 s | local |
+
+Prediction files for the BOP website (method name `cnosv2pbr`): `datasets/bop23_challenge/results/bop_submission_pbr/`.
+
+**Pyrender vs BlenderProc templates.** The paper (rows 6 and 7) gained 4.3 AP from the realistic
+templates with SAM + DINOv2. With SAM2 + DINOv3 the two template kinds are on par on average
+(LM-O +1.2, YCB-V -0.1, IC-BIN -2.3) and the realistic ones lose on the two datasets with untextured
+objects: T-LESS (-3.0) and TUD-L (-8.7). The selected templates were inspected
+(`python -m src.dataloader.bop_pbr <dataset>`, viewing-direction error 0.4 to 3.2 degrees on
+average, 17.6 on LM-O whose PBR scenes only show the objects from above). What differs from the
+pyrender renderings: the BlenderProc4BOP frames light the untextured objects with random coloured
+illumination (T-LESS parts come out green, pink or grey; the white TUD-L ape pink or blue), the
+objects are small (median mask side 88 px on TUD-L, 95 px on LM-O, against 406 px for the pyrender
+renderings) and up to 20% occluded (`visib_fract` > 0.8). On TUD-L the realistic templates of the
+white ape then match almost every white blob: 80% of all detections are labelled as that object
+(a third with pyrender templates). The 2D detection AP drops more than the segmentation AP with
+BlenderProc templates (YCB-V 57.3 -> 51.0 for the same proposals): the boxes of identical masks are
+identical in both runs, the realistic templates simply rank and label the SAM2 proposals differently.
 
 #### YCB-V: effect of the SAM2 stability threshold
 
@@ -352,8 +422,6 @@ ground-truth instance, its label is correct 99.9% of the time. Denser point grid
 
 ### Not ported
 
-- `rendering_type=pbr` (templates selected from the BlenderProc `train_pbr` frames of each dataset,
-  `src/dataloader/bop_pbr.py` upstream) raises `NotImplementedError`.
 - FastSAM, model-free onboarding (HOT3D / HANDAL videos), multi-GPU / SLURM.
 
 ## Configuration
