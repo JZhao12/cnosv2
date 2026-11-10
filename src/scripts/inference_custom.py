@@ -78,6 +78,9 @@ def run_inference(template_dir, rgb_path, mask_path, num_max_dets, conf_threshol
     metric = Similarity()
     logging.info("Initializing model")
     model = instantiate(cfg.model)
+    # DINOv3 randomly rescales its RoPE coordinates in train mode, which makes the
+    # descriptors non-deterministic; switch every submodule to inference behaviour
+    model.eval()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.move_to_device(device)
@@ -179,7 +182,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--num_max_dets", nargs="?", default=1, type=int, help="Number of max detections")
     parser.add_argument("--confg_threshold", nargs="?", default=0.5, type=float, help="Confidence threshold")
-    parser.add_argument("--stability_score_thresh", nargs="?", default=0.97, type=float, help="stability_score_thresh of SAM")
+    parser.add_argument("--stability_score_thresh", nargs="?", default=0.85, type=float, help="stability_score_thresh of SAM2 (0.97 of SAM v1 is too strict for SAM2)")
     args = parser.parse_args()
 
     os.makedirs(f"{args.template_dir}/cnos_results", exist_ok=True)

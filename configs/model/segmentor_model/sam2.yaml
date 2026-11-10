@@ -1,7 +1,7 @@
 _target_: src.model.sam2.CustomSam2AutomaticMaskGenerator
 
 points_per_batch: 64
-stability_score_thresh: 0.97
+stability_score_thresh: 0.85 # SAM v1 used 0.97; too strict for SAM2 (proposal recall 71% -> 98% on YCB-V)
 box_nms_thresh: 0.7
 min_mask_region_area: 0
 
