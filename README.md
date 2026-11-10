@@ -19,7 +19,9 @@ The two backbone models are swapped for newer ones. The custom single-image pipe
 validated qualitatively on the CAD models and images shipped in `media/`.
 
 BOP evaluation is ported (`run_inference.py` + local `bop_toolkit` scoring) and has been run on the
-seven BOP'23 core datasets; the numbers are listed in [Testing on BOP datasets](#testing-on-bop-datasets).
+seven BOP'23 core datasets. Mean 2D segmentation AP over the seven datasets is **45.5**, against
+36.1 (SAM + pyrender) and 40.4 (SAM + BlenderProc) reported for the original CNOS; see
+[Results](#results). ITODD and HB were scored on the BOP website, the other five locally.
 
 ## Pipeline
 
@@ -30,6 +32,49 @@ RGB image ──SAM2 auto-masks──▶ N proposals ──DINOv3──▶ propo
                                                           │
                             cosine similarity (mean of top 5) ──▶ threshold ──▶ mask / vis / json
 ```
+
+## Method description
+
+Text used for the method entry on the [BOP website](https://bop.felk.cvut.cz/) (its description template).
+
+**Submitted to:** BOP Challenge 2025, model-based 2D detection and 2D segmentation of unseen objects,
+BOP-Classic-Core (LM-O, T-LESS, TUD-L, IC-BIN, ITODD, HB, YCB-V), BOP'19 test targets.
+
+**Training data:** none. CNOSv2 is zero-shot: SAM 2.1 Hiera-L and DINOv3 ViT-L/16 are used with their
+public pretrained weights (`sam2.1_hiera_large.pt`, `dinov3_vitl16_pretrain_lvd1689m`), no fine-tuning
+on BOP data.
+
+**Onboarding data:** 42 templates per object rendered with pyrender from the CAD model (viewpoints of
+the level-0 icosphere, camera distance 0.4 of the predefined poses, black background, uniform grey
+material for T-LESS). No real onboarding images.
+
+**Used 3D models:** the default BOP CAD models (`models/`, `models_cad/` for T-LESS).
+
+**Notes:** the three-stage CNOS pipeline (Nguyen et al., ICCV-W 2023) with newer backbones.
+(1) Proposals: SAM 2.1 automatic mask generator on the RGB image resized to 640 px width,
+`points_per_side` 32, `pred_iou_thresh` 0.8, `stability_score_thresh` 0.85 (the SAM v1 value 0.97 is too
+strict for SAM2 and discards most proposals), `box_nms_thresh` 0.7; proposals smaller than 5% of the
+image side or 0.03% of the image area are dropped. (2) Descriptors: each proposal is masked, cropped,
+padded to a square and resized to 224x224; the DINOv3 CLS token (1024-d) is the descriptor, the same
+for the templates. (3) Matching: cosine similarity between a proposal and the 42 templates of every
+object, aggregated as the mean of the top 5; the object with the highest score is assigned, proposals
+below 0.15 are rejected, per-object NMS at IoU 0.25, at most 100 instances per image. The same
+prediction file serves both tasks (modal mask as RLE for segmentation, amodal box for detection);
+`time` is the wall time of stages 1 to 3 per image. Inference runs in `bf16-mixed` with
+pytorch-lightning. Code: https://github.com/JZhao12/cnosv2.
+
+### Computer specifications
+
+| Component | Value |
+|---|---|
+| GPU | 1x NVIDIA GeForce RTX 5070, 12 GB |
+| CPU | Intel Core Ultra 9 285K, 24 cores |
+| RAM | 62 GB |
+| Storage | Samsung 990 EVO Plus NVMe SSD, 2 TB |
+| OS | Ubuntu 24.04.5 LTS, Linux 7.0.0-42-generic |
+| Driver / CUDA | NVIDIA driver 595.99.02, CUDA 12.8, cuDNN 9.10 |
+| Software | Python 3.10.22, PyTorch 2.8.0+cu128, pytorch-lightning 2.5.4, SAM 2.1, DINOv3 (torch.hub, local), bop_toolkit |
+| Runtime | about 1.2 s per image end to end (SAM2 proposals ~1.1 s, DINOv3 descriptors + matching ~0.1 s); template rendering (642 views per object) under a minute per dataset; GPU memory 5 to 10 GB depending on image size (640x480 to 1280x960) |
 
 ## Layout
 
@@ -247,42 +292,43 @@ the [BOP website](https://bop.felk.cvut.cz/) for scoring.
 ### Results
 
 All numbers: BOP'19 test targets, SAM 2.1 Hiera-L proposals (`stability_score_thresh` 0.85), DINOv3
-ViT-L/16 descriptors, pyrender templates at level 0 (42 views), `bf16-mixed`, single RTX 5070,
-scored locally with `bop_toolkit` (`python -m src.scripts.summarize_bop_results`).
+ViT-L/16 descriptors, pyrender templates at level 0 (42 views), `bf16-mixed`, single RTX 5070
+(see [Method description](#method-description)). LM-O, T-LESS, TUD-L, IC-BIN and YCB-V are scored
+locally with `bop_toolkit`; ITODD and HB by the BOP website. Tables are generated with
+`python -m src.scripts.summarize_bop_results`.
 
 #### 2D segmentation AP (BOP'19 test targets, pyrender templates, 42 views)
 
 | Method | LM-O | T-LESS | TUD-L | IC-BIN | ITODD | HB | YCB-V | Mean |
 |---|---|---|---|---|---|---|---|---|
-| CNOS (SAM) + Pyrender [paper] | 33.3 | 38.3 | 35.8 | 27.2 | 14.8 | 45.9 | 57.6 | 36.1 |
-| CNOS (SAM) + Pyrender [paper, mean over 5 evaluated sets] | 33.3 | 38.3 | 35.8 | 27.2 | 14.8 | 45.9 | 57.6 | 38.4 |
-| CNOS (SAM) + BlenderProc [paper] | 39.6 | 39.7 | 39.1 | 28.4 | 28.2 | 48.0 | 59.5 | 40.4 |
-| CNOS (SAM) + BlenderProc [paper, mean over 5 evaluated sets] | 39.6 | 39.7 | 39.1 | 28.4 | 28.2 | 48.0 | 59.5 | 41.3 |
-| CNOS (FastSAM) + BlenderProc [paper] | 39.7 | 37.4 | 48.0 | 27.0 | 25.4 | 51.1 | 59.9 | 41.2 |
-| CNOS (FastSAM) + BlenderProc [paper, mean over 5 evaluated sets] | 39.7 | 37.4 | 48.0 | 27.0 | 25.4 | 51.1 | 59.9 | 42.4 |
-| **CNOSv2 (SAM2.1-L + DINOv3-L) + Pyrender** | 41.7 | 46.3 | 46.6 | 38.6 | - | - | 65.6 | 47.7 |
+| CNOS (SAM + DINOv2 + Pyrender) | 33.3 | 38.3 | 35.8 | 27.2 | 14.8 | 45.9 | 57.6 | 36.1 |
+| CNOS (SAM + DINOv2 + BlenderProc) | 39.6 | 39.7 | 39.1 | 28.4 | 28.2 | 48.0 | 59.5 | 40.4 |
+| CNOS (FastSAM + DINOv2 + BlenderProc) | 39.7 | 37.4 | 48.0 | 27.0 | 25.4 | 51.1 | 59.9 | 41.2 |
+| CNOSv2 (SAM2 + DINOv3 + Pyrender) | 41.7 | 46.3 | 46.6 | 38.6 | 23.7 | 56.3 | 65.6 | 45.5 |
+
+The first 3 rows are Table 1 of the CNOS paper (ICCV-W 2023).
 
 #### 2D detection AP (amodal bbox), ours only
 
 | Method | LM-O | T-LESS | TUD-L | IC-BIN | ITODD | HB | YCB-V | Mean |
 |---|---|---|---|---|---|---|---|---|
-| CNOSv2 (SAM2.1-L + DINOv3-L) + Pyrender | 41.6 | 36.5 | 40.0 | 26.0 | - | - | 57.3 | 40.3 |
+| CNOSv2 (SAM2 + DINOv3 + Pyrender) | 41.6 | 36.5 | 40.0 | 26.0 | - | - | 57.3 | 40.3 |
 
 #### Per-dataset details (ours)
 
-| Dataset | images | detections | segm AP | AP50 | AP75 | AR100 | bbox AP | time / image |
-|---|---|---|---|---|---|---|---|---|
-| LM-O | 200 | 10839 | 41.7 | 69.8 | 46.4 | 50.7 | 41.6 | 1.27 s |
-| T-LESS | 1000 | 49646 | 46.3 | 57.6 | 53.1 | 55.7 | 36.5 | 1.28 s |
-| TUD-L | 600 | 17544 | 46.6 | 75.9 | 52.6 | 52.3 | 40.0 | 1.17 s |
-| IC-BIN | 150 | 4358 | 38.6 | 66.1 | 41.7 | 44.9 | 26.0 | 1.25 s |
-| ITODD | 721 | 5872 | - | - | - | - | - | no test GT in the BOP release, score on bop.felk.cvut.cz |
-| HB | 300 | 11206 | - | - | - | - | - | no test GT in the BOP release, score on bop.felk.cvut.cz |
-| YCB-V | 900 | 23503 | 65.6 | 87.0 | 76.4 | 72.8 | 57.3 | 1.24 s |
+| Dataset | images | detections | segm AP | AP50 | AP75 | AR100 | bbox AP | time / image | scored |
+|---|---|---|---|---|---|---|---|---|---|
+| LM-O | 200 | 10839 | 41.7 | 69.8 | 46.4 | 50.7 | 41.6 | 1.27 s | local |
+| T-LESS | 1000 | 49646 | 46.3 | 57.6 | 53.1 | 55.7 | 36.5 | 1.28 s | local |
+| TUD-L | 600 | 17544 | 46.6 | 75.9 | 52.6 | 52.3 | 40.0 | 1.17 s | local |
+| IC-BIN | 150 | 4358 | 38.6 | 66.1 | 41.7 | 44.9 | 26.0 | 1.25 s | local |
+| ITODD | 721 | 5872 | 23.7 | 35.5 | 27.4 | 37.9 | - | 1.14 s | BOP website |
+| HB | 300 | 11206 | 56.3 | 70.6 | 65.6 | 59.8 | - | 1.24 s | BOP website |
+| YCB-V | 900 | 23503 | 65.6 | 87.0 | 76.4 | 72.8 | 57.3 | 1.24 s | local |
 
-Not locally evaluable: ITODD, HB (their BOP'19 test archives ship no scene_gt.json); the paper rows' last column also shows the mean over the 5 evaluated datasets for a like-for-like comparison.
+ITODD, HB: the BOP'19 test archives ship no scene_gt.json, so these scores come from the BOP website (same eval_bop22_coco.py); raw score files in docs/bop_website_scores/. Their bbox AP is listed only if the 2D detection task was also scored there.
 
-ITODD and HB predictions, renamed for the BOP website, are in `datasets/bop23_challenge/results/bop_submission/`.
+The files uploaded to the BOP website (one per dataset, `cnosv2_<dataset>-test*.json[.gz]`) are written by `run_bop_dataset.sh` and collected in `datasets/bop23_challenge/results/bop_submission/`.
 
 #### YCB-V: effect of the SAM2 stability threshold
 
