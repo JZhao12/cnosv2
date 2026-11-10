@@ -76,7 +76,7 @@ def process_and_render(obj_path, angle):
 # np.pi, np.pi/4*3, np.pi/2, np.pi/4, 0, -np.pi/4, -np.pi/2, -np.pi/4*3
 
 if __name__ == "__main__":
-    obj_path = "./media/ycbv_models/models/obj_000009.ply"    
+    obj_path = "./datasets/bop23_challenge/datasets/ycbv/models/obj_000009.ply"    
     rotation_angle = np.pi
     view_id = 0
     save_dir = "patent"

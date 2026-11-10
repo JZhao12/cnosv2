@@ -78,8 +78,8 @@ def process_object_square(rgb_path, mask_path, output_path, final_size=150):
 
 if __name__ == "__main__":
     # inputs
-    rgb_file = "./media/ycbv_test_bop19/test/000049/rgb/000001.png"
-    mask_file = "./media/ycbv_test_bop19/test/000049/mask_visib/000001_000002.png"
+    rgb_file = "./datasets/bop23_challenge/datasets/ycbv/test/000049/rgb/000001.png"
+    mask_file = "./datasets/bop23_challenge/datasets/ycbv/test/000049/mask_visib/000001_000002.png"
     
     # output
     output_file = "./tmp/ycbv_models/crop/obj09.png"

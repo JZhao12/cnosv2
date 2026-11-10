@@ -23,23 +23,24 @@ lmo_object_ids = np.array(
 
 
 def mask_to_rle(binary_mask):
+    """
+    Uncompressed COCO RLE (column-major, counts start with the number of zeros),
+    as expected by bop_toolkit / pycocotools. Vectorized version of the original
+    per-pixel loop, same output.
+    """
+    binary_mask = np.asarray(binary_mask)
     rle = {"counts": [], "size": list(binary_mask.shape)}
-    counts = rle.get("counts")
-
-    last_elem = 0
-    running_length = 0
-
-    for i, elem in enumerate(binary_mask.ravel(order="F")):
-        if elem == last_elem:
-            pass
-        else:
-            counts.append(running_length)
-            running_length = 0
-            last_elem = elem
-        running_length += 1
-
-    counts.append(running_length)
-
+    flat = binary_mask.ravel(order="F").astype(bool)
+    if flat.size == 0:
+        rle["counts"] = [0]
+        return rle
+    change = np.flatnonzero(flat[1:] != flat[:-1]) + 1
+    starts = np.concatenate([[0], change])
+    ends = np.concatenate([change, [flat.size]])
+    counts = (ends - starts).tolist()
+    if flat[0]:  # mask starts with a foreground pixel: leading run of zeros is empty
+        counts.insert(0, 0)
+    rle["counts"] = counts
     return rle
 
 
@@ -169,18 +170,26 @@ class Detections:
             setattr(self, key, torch.from_numpy(getattr(self, key)))
 
     def save_to_file(
-        self, scene_id, frame_id, runtime, file_path, dataset_name, return_results=False, save_mask=True, save_score_distribution=False
+        self, scene_id, frame_id, runtime, file_path, dataset_name, return_results=False, save_mask=True, save_score_distribution=False, obj_ids=None
     ):
         """
         scene_id, image_id, category_id, bbox, time
+
+        `obj_ids`: BOP object ids of the reference objects, indexed by `object_ids`
+        (e.g. [1, 5, 6, 8, ...] for LM-O). Without it, falls back to `object_ids + 1`
+        (or the hard-coded LM-O table).
         """
         boxes = xyxy_to_xywh(self.boxes)
+        if obj_ids is not None:
+            category_id = np.asarray(obj_ids)[np.asarray(self.object_ids, dtype=np.int64)]
+        elif dataset_name == "lmo":
+            category_id = lmo_object_ids[self.object_ids]
+        else:
+            category_id = self.object_ids + 1
         results = {
             "scene_id": scene_id,
             "image_id": frame_id,
-            "category_id": self.object_ids + 1
-            if dataset_name != "lmo"
-            else lmo_object_ids[self.object_ids],
+            "category_id": category_id,
             "score": self.scores,
             "bbox": boxes,
             "time": runtime,

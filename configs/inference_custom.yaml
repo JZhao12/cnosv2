@@ -2,3 +2,6 @@ defaults:
   - user: default
   - model: cnos
   - _self_
+
+# inference_custom.py writes next to the templates, CNOS.log_dir is not used there
+save_dir: null
