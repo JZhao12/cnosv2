@@ -21,10 +21,10 @@ BOP evaluation is ported (`run_inference.py` + local `bop_toolkit` scoring) and 
 seven BOP'23 core datasets with both kinds of templates of the paper. With pyrender templates the mean
 2D segmentation AP over the seven datasets is **45.5**, against 36.1 (SAM + pyrender) and 40.4
 (SAM + BlenderProc) reported for the original CNOS. With BlenderProc templates (frames of the
-BlenderProc4BOP training split) the mean over the five locally scored datasets is 45.2, against 45.5
-for pyrender on the same five: unlike in the paper, realistic templates bring no gain on top of
-SAM2 + DINOv3; see [Results](#results). ITODD and HB were scored on the BOP website, the other
-five locally.
+BlenderProc4BOP training split) the mean is **44.9**: unlike in the paper, realistic templates bring
+no gain on top of SAM2 + DINOv3 on average, they help on ITODD and LM-O and hurt on the untextured
+T-LESS and TUD-L objects; see [Results](#results). ITODD and HB were scored on the BOP website, the
+other five locally.
 
 ## Pipeline
 
@@ -341,12 +341,9 @@ locally with `bop_toolkit`; ITODD and HB by the BOP website. Tables are generate
 | CNOS (SAM + DINOv2 + BlenderProc) | 39.6 | 39.7 | 39.1 | 28.4 | 28.2 | 48.0 | 59.5 | 40.4 |
 | CNOS (FastSAM + DINOv2 + BlenderProc) | 39.7 | 37.4 | 48.0 | 27.0 | 25.4 | 51.1 | 59.9 | 41.2 |
 | CNOSv2 (SAM2 + DINOv3 + Pyrender) | 41.7 | 46.3 | 46.6 | 38.6 | 23.7 | 56.3 | 65.6 | 45.5 |
-| CNOSv2 (SAM2 + DINOv3 + BlenderProc) | 42.9 | 43.3 | 37.9 | 36.3 | - | - | 65.5 | 45.2 |
+| CNOSv2 (SAM2 + DINOv3 + BlenderProc) | 42.9 | 43.3 | 37.9 | 36.3 | 32.6 | 55.8 | 65.5 | 44.9 |
 
-The first 3 rows are Table 1 of the CNOS paper (ICCV-W 2023). The BlenderProc row of CNOSv2 is
-awaiting the BOP website scores of ITODD and HB (prediction files in
-`datasets/bop23_challenge/results/bop_submission_pbr/`); its mean is over the five scored datasets,
-where the pyrender row averages 47.8.
+The first 3 rows are Table 1 of the CNOS paper (ICCV-W 2023).
 
 #### 2D detection AP (amodal bbox), ours only
 
@@ -379,16 +376,20 @@ The files uploaded to the BOP website (one per dataset, `cnosv2_<dataset>-test*.
 | T-LESS | 1000 | 50377 | 43.3 | 53.3 | 49.7 | 54.0 | 31.5 | 1.28 s | local |
 | TUD-L | 600 | 16853 | 37.9 | 63.4 | 42.9 | 52.4 | 33.8 | 1.15 s | local |
 | IC-BIN | 150 | 4633 | 36.3 | 62.8 | 39.4 | 44.3 | 24.3 | 1.21 s | local |
-| ITODD | 721 | 5827 | - | - | - | - | - | 1.14 s | BOP website, pending |
-| HB | 300 | 11469 | - | - | - | - | - | 1.22 s | BOP website, pending |
+| ITODD | 721 | 5827 | 32.6 | 48.3 | 37.4 | 46.0 | - | 1.12 s | BOP website |
+| HB | 300 | 11469 | 55.8 | 70.7 | 65.2 | 61.7 | - | 1.21 s | BOP website |
 | YCB-V | 900 | 23704 | 65.5 | 87.0 | 76.6 | 71.2 | 51.0 | 1.18 s | local |
 
-Prediction files for the BOP website (method name `cnosv2pbr`): `datasets/bop23_challenge/results/bop_submission_pbr/`.
+ITODD and HB: scored by the BOP website (method name `cnosv2pbr`, prediction files in
+`datasets/bop23_challenge/results/bop_submission_pbr/`, raw score files in `docs/bop_website_scores/`).
 
 **Pyrender vs BlenderProc templates.** The paper (rows 6 and 7) gained 4.3 AP from the realistic
 templates with SAM + DINOv2. With SAM2 + DINOv3 the two template kinds are on par on average
-(LM-O +1.2, YCB-V -0.1, IC-BIN -2.3) and the realistic ones lose on the two datasets with untextured
-objects: T-LESS (-3.0) and TUD-L (-8.7). The selected templates were inspected
+(44.9 against 45.5): the realistic ones win clearly on ITODD (+8.9, the dataset where the paper also
+gained the most: its grey industrial parts under industrial lighting are far from the flat grey
+pyrender renderings), slightly on LM-O (+1.2), are even on YCB-V (-0.1) and HB (-0.5), and lose on
+IC-BIN (-2.3) and on the two datasets with untextured objects: T-LESS (-3.0) and TUD-L (-8.7). The
+selected templates were inspected
 (`python -m src.dataloader.bop_pbr <dataset>`, viewing-direction error 0.4 to 3.2 degrees on
 average, 17.6 on LM-O whose PBR scenes only show the objects from above). What differs from the
 pyrender renderings: the BlenderProc4BOP frames light the untextured objects with random coloured
